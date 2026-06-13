@@ -27,7 +27,7 @@ jobs:
 
       - name: Install Oracle Cloud CLI Dependencies
         run: |
-          pip install oci
+          pip install --upgrade oci cryptography
 
       - name: Create Oracle Instance Directly via API
         env:
@@ -43,12 +43,17 @@ jobs:
           import os
           import oci
 
+          # Private Key එකේ තියෙන අවුල් මඟහරවා ගැනීමට Format කිරීම
+          key_content = os.environ["OCI_KEY_CONTENT"].strip()
+          if not key_content.endswith('\n'):
+              key_content += '\n'
+
           config = {
               "user": os.environ["OCI_USER"],
               "fingerprint": os.environ["OCI_FINGERPRINT"],
               "tenancy": os.environ["OCI_TENANCY"],
               "region": os.environ["OCI_REGION"],
-              "key_content": os.environ["OCI_KEY_CONTENT"]
+              "key_content": key_content
           }
 
           compute_client = oci.core.ComputeClient(config)
