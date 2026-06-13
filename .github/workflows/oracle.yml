@@ -25,88 +25,54 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Oracle Cloud CLI Dependencies
+      - name: Install Oracle CLI
         run: |
-          pip install --upgrade oci cryptography
+          pip install oci-cli
 
-      - name: Create Oracle Instance Directly via API
-        env:
-          OCI_USER: ${{ secrets.OCI_USER }}
-          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_COMPARTMENT: ${{ secrets.OCI_COMPARTMENT }}
-          OCI_SUBNET: ${{ secrets.OCI_SUBNET }}
-          OCI_KEY_CONTENT: ${{ secrets.OCI_KEY_CONTENT }}
+      - name: Configure OCI Credentials
         run: |
-          python - << 'EOF'
-          import os
-          import oci
+          mkdir -p ~/.oci
+          echo "[DEFAULT]" > ~/.oci/config
+          echo "user=${{ secrets.OCI_USER }}" >> ~/.oci/config
+          echo "fingerprint=${{ secrets.OCI_FINGERPRINT }}" >> ~/.oci/config
+          echo "tenancy=${{ secrets.OCI_TENANCY }}" >> ~/.oci/config
+          echo "region=${{ secrets.OCI_REGION }}" >> ~/.oci/config
+          echo "key_file=~/.oci/oci_api_key.pem" >> ~/.oci/config
+          echo "${{ secrets.OCI_KEY_CONTENT }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
 
-          # Private Key එකේ තියෙන අවුල් මඟහරවා ගැනීමට Format කිරීම
-          key_content = os.environ["OCI_KEY_CONTENT"].strip()
-          if not key_content.endswith('\n'):
-              key_content += '\n'
+      - name: Create Oracle Instance via OCI CLI
+        run: |
+          echo "Fetching Availability Domains..."
+          TARGET_AD=$(oci iam availability-domain list --compartment-id "${{ secrets.OCI_COMPARTMENT }}" --query "data[0].name" --raw-output)
+          echo "Target Availability Domain: $TARGET_AD"
 
-          config = {
-              "user": os.environ["OCI_USER"],
-              "fingerprint": os.environ["OCI_FINGERPRINT"],
-              "tenancy": os.environ["OCI_TENANCY"],
-              "region": os.environ["OCI_REGION"],
-              "key_content": key_content
-          }
+          echo "Fetching Ubuntu ARM Image ID..."
+          TARGET_IMAGE_ID=$(oci compute image list --compartment-id "${{ secrets.OCI_COMPARTMENT }}" --shape "VM.Standard.A1.Flex" --operating-system "Canonical Ubuntu" --query "data[0].id" --raw-output)
+          echo "Target Image ID: $TARGET_IMAGE_ID"
 
-          compute_client = oci.core.ComputeClient(config)
-          identity_client = oci.identity.IdentityClient(config)
+          echo "Attempting to launch Oracle Ampere VPS..."
+          OUTPUT=$(oci compute instance launch \
+            --display-name "AlwaysFree-Ampere-VPS" \
+            --compartment-id "${{ secrets.OCI_COMPARTMENT }}" \
+            --availability-domain "$TARGET_AD" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
+            --image-id "$TARGET_IMAGE_ID" \
+            --subnet-id "${{ secrets.OCI_SUBNET }}" \
+            --assign-public-ip true 2>&1) || EXIT_CODE=$?
 
-          try:
-              print("Fetching Availability Domains...")
-              ads = identity_client.list_availability_domains(compartment_id=os.environ["OCI_COMPARTMENT"]).data
-              target_ad = ads[0].name
-              print(f"Target Availability Domain: {target_ad}")
+          echo "$OUTPUT"
 
-              print("Fetching Ubuntu ARM Image...")
-              images = compute_client.list_images(
-                  compartment_id=os.environ["OCI_COMPARTMENT"],
-                  shape="VM.Standard.A1.Flex",
-                  operating_system="Canonical Ubuntu"
-              ).data
-              target_image_id = images[0].id
-              print(f"Target Image ID: {target_image_id}")
-
-              launch_instance_details = oci.core.LaunchInstanceDetails(
-                  display_name="AlwaysFree-Ampere-VPS",
-                  compartment_id=os.environ["OCI_COMPARTMENT"],
-                  shape="VM.Standard.A1.Flex",
-                  availability_domain=target_ad,
-                  shape_config=oci.core.LaunchInstanceShapeConfigDetails(
-                      ocpus=4,
-                      memory_in_gbs=24
-                  ),
-                  source_details=oci.core.InstanceSourceViaImageDetails(
-                      source_type="image",
-                      image_id=target_image_id
-                  ),
-                  create_vnic_details=oci.core.CreateVnicDetails(
-                      subnet_id=os.environ["OCI_SUBNET"],
-                      assign_public_ip=True
-                  )
-              )
-
-              print("Attempting to create Oracle Ampere VPS...")
-              instance = compute_client.launch_instance(launch_instance_details)
-              print(f"SUCCESS! Instance created. ID: {instance.data.id}")
-
-          except oci.exceptions.ServiceError as e:
-              if e.status == 500 and "Out of host capacity" in e.message:
-                  print("STATUS: Out of host capacity in your region. Will retry in next run.")
-              elif e.status == 400 and "LimitExceeded" in e.message:
-                  print("STATUS: You already have an instance running or reached Free Tier limits.")
-              else:
-                  print(f"Oracle API Service Error: {e.message}")
-          except Exception as e:
-              print(f"Unexpected Script Error: {str(e)}")
-          EOF
+          if [ -z "$EXIT_CODE" ]; then
+            echo "SUCCESS! Oracle Instance Created Successfully."
+          elif echo "$OUTPUT" | grep -q "Out of host capacity"; then
+            echo "STATUS: Out of host capacity in your region. Will retry in 30 minutes."
+          elif echo "$OUTPUT" | grep -q "LimitExceeded"; then
+            echo "STATUS: Limit exceeded. You may already have a running instance."
+          else
+            echo "Error occurred during execution. Please check the log above."
+          fi
 
       - name: Keep Workflow Alive
         run: |
