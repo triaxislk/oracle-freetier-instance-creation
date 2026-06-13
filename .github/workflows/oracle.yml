@@ -6,6 +6,10 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
+# මෙන්න මේ කොටස අලුතින් එකතු කරන්න
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   run-script:
     runs-on: ubuntu-latest
@@ -36,7 +40,6 @@ jobs:
           import os
           import oci
 
-          # Config Setup
           config = {
               "user": os.environ["OCI_USER"],
               "fingerprint": os.environ["OCI_FINGERPRINT"],
@@ -51,7 +54,6 @@ jobs:
           try:
               print("Fetching Availability Domains...")
               ads = identity_client.list_availability_domains(compartment_id=os.environ["OCI_COMPARTMENT"]).data
-              # Select the first available domain (AD-1)
               target_ad = ads[0].name
               print(f"Target Availability Domain: {target_ad}")
 
@@ -64,7 +66,6 @@ jobs:
               target_image_id = images[0].id
               print(f"Target Image ID: {target_image_id}")
 
-              # Instance Launch Details (Always Free Ampere Shape)
               launch_instance_details = oci.core.LaunchInstanceDetails(
                   display_name="AlwaysFree-Ampere-VPS",
                   compartment_id=os.environ["OCI_COMPARTMENT"],
