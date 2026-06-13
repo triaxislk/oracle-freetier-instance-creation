@@ -18,11 +18,11 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install Oracle Cloud CLI Dependencies
         run: |
-          pip install -r requirements.txt
+          pip install oci
 
-      - name: Run Oracle Script
+      - name: Create Oracle Instance Directly via API
         env:
           OCI_USER: ${{ secrets.OCI_USER }}
           OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
@@ -32,4 +32,55 @@ jobs:
           OCI_SUBNET: ${{ secrets.OCI_SUBNET }}
           OCI_KEY_CONTENT: ${{ secrets.OCI_KEY_CONTENT }}
         run: |
-          python main.py
+          python - << 'EOF'
+          import os
+          import oci
+
+          # Config Setup
+          config = {
+              "user": os.environ["OCI_USER"],
+              "fingerprint": os.environ["OCI_FINGERPRINT"],
+              "tenancy": os.environ["OCI_TENANCY"],
+              "region": os.environ["OCI_REGION"],
+              "key_content": os.environ["OCI_KEY_CONTENT"]
+          }
+
+          compute_client = oci.core.ComputeClient(config)
+
+          # Instance Launch Details (Always Free Ampere Shape)
+          launch_instance_details = oci.core.LaunchInstanceDetails(
+              display_name="AlwaysFree-Ampere-VPS",
+              compartment_id=os.environ["OCI_COMPARTMENT"],
+              shape="VM.Standard.A1.Flex",
+              shape_config=oci.core.LaunchInstanceShapeConfigDetails(
+                  ocpus=4,
+                  memory_in_gbs=24
+              ),
+              source_details=oci.core.InstanceSourceViaImageDetails(
+                  source_type="image",
+                  # Oracle-Provided Ubuntu 22.04 Minimal Image ID for ARM
+                  image_id=compute_client.list_images(
+                      compartment_id=os.environ["OCI_COMPARTMENT"],
+                      shape="VM.Standard.A1.Flex",
+                      operating_system="Canonical Ubuntu"
+                  ).data[0].id
+              ),
+              create_vnic_details=oci.core.CreateVnicDetails(
+                  subnet_id=os.environ["OCI_SUBNET"],
+                  assign_public_ip=True
+              ),
+              availability_domain=compute_client.list_availability_domains(
+                  compartment_id=os.environ["OCI_COMPARTMENT"]
+              ).data[0].name
+          )
+
+          try:
+              print("Attempting to create Oracle Ampere VPS...")
+              instance = compute_client.launch_instance(launch_instance_details)
+              print(f"SUCCESS! Instance created. ID: {instance.data.id}")
+          except oci.exceptions.ServiceError as e:
+              if e.status == 500 and "Out of host capacity" in e.message:
+                  print("STATUS: Out of host capacity in your region. Will retry in next run.")
+              else:
+                  print(f"Oracle API Error: {e.message}")
+          EOF
